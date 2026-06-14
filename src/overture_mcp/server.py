@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 import os
 from typing import Annotated
 
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -34,6 +35,8 @@ mcp = FastMCP(
     ),
     stateless_http=True,
     json_response=True,
+    # Disable DNS-rebinding protection — this MCP is only called server-side
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 
