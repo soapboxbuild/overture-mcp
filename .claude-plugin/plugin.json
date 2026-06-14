@@ -1,0 +1,48 @@
+{
+  "name": "Overture Maps",
+  "description": "Building footprint data from Overture Maps — geocode addresses and query 2.5B global building polygons with height, class, floor count, and GeoJSON geometry.",
+  "version": "1.0.0",
+  "author": "soapboxbuild",
+  "repository": "https://github.com/soapboxbuild/overture-mcp",
+  "mcp": {
+    "transport": "streamable-http",
+    "url": "${OVERTURE_MCP_URL}/mcp",
+    "auth": {
+      "type": "bearer",
+      "env": "OVERTURE_MCP_SECRET"
+    }
+  },
+  "tools": [
+    {
+      "name": "address_search",
+      "description": "Geocode a free-text address using Nominatim (OpenStreetMap). Returns lat/lon + metadata."
+    },
+    {
+      "name": "get_building",
+      "description": "Get building footprint (GeoJSON, height, floors, class) at a coordinate from Overture Maps."
+    },
+    {
+      "name": "get_building_by_id",
+      "description": "Fetch a specific Overture building by its GERS ID. Provide lat/lon hints for speed."
+    },
+    {
+      "name": "nearby_buildings",
+      "description": "List buildings within a radius of a coordinate, sorted by distance."
+    }
+  ],
+  "skills": [
+    "skills/overture-maps/SKILL.md"
+  ],
+  "env": [
+    {
+      "name": "OVERTURE_MCP_URL",
+      "description": "Base URL of the deployed Overture Maps MCP server",
+      "required": true
+    },
+    {
+      "name": "OVERTURE_MCP_SECRET",
+      "description": "Bearer token matching MCP_SERVER_SECRET on the server",
+      "required": false
+    }
+  ]
+}
