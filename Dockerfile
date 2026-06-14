@@ -14,8 +14,8 @@ ENV PYTHONPATH=/app/src
 RUN python3 -c "import duckdb; c=duckdb.connect(); c.execute('INSTALL httpfs; INSTALL spatial;'); print('DuckDB extensions installed')"
 
 COPY src/ src/
+COPY start.sh .
 
 EXPOSE 8000
 
-# Shell form so $PORT is expanded; module path matches PYTHONPATH=/app/src
-CMD uvicorn overture_mcp.server:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info
+CMD ["sh", "start.sh"]
