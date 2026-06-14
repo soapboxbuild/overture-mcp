@@ -8,6 +8,7 @@ Port: from PORT env var (default 8000).
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import os
 from typing import Annotated
 
@@ -154,7 +155,16 @@ async def health(request: Request) -> JSONResponse:
 
 mcp_starlette = mcp.streamable_http_app()
 
+
+@asynccontextmanager
+async def lifespan(app: Starlette):
+    # Forward lifespan to the inner MCP app so its task group initialises
+    async with mcp_starlette.router.lifespan_context(mcp_starlette):
+        yield
+
+
 app = Starlette(
+    lifespan=lifespan,
     routes=[
         Route("/health", health),
         Mount("/", app=mcp_starlette),
