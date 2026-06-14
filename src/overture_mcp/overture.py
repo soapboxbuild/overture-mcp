@@ -18,7 +18,8 @@ OVERTURE_BUILDINGS = (
 def _new_conn() -> duckdb.DuckDBPyConnection:
     """Create a fresh DuckDB connection with required extensions loaded."""
     conn = duckdb.connect()
-    conn.execute("INSTALL httpfs; INSTALL spatial; LOAD httpfs; LOAD spatial;")
+    # Extensions are pre-installed in Docker image — LOAD only, no network needed at runtime
+    conn.execute("LOAD httpfs; LOAD spatial;")
     conn.execute("SET s3_region='us-west-2';")
     return conn
 

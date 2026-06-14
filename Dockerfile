@@ -18,4 +18,4 @@ COPY src/ src/
 EXPOSE 8000
 
 # Shell form so $PORT is expanded; module path matches PYTHONPATH=/app/src
-CMD uvicorn overture_mcp.server:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD uvicorn overture_mcp.server:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info
