@@ -15,13 +15,19 @@ OVERTURE_BUILDINGS = (
 )
 
 
-def _new_conn() -> duckdb.DuckDBPyConnection:
-    """Create a fresh DuckDB connection with required extensions loaded."""
-    conn = duckdb.connect()
-    # Extensions are pre-installed in Docker image — LOAD only, no network needed at runtime
-    conn.execute("LOAD httpfs; LOAD spatial;")
-    conn.execute("SET s3_region='us-west-2';")
-    return conn
+# Cached connection — avoids repeated extension loading + S3 metadata fetches per request
+_conn: duckdb.DuckDBPyConnection | None = None
+
+
+def _get_conn() -> duckdb.DuckDBPyConnection:
+    """Return the module-level DuckDB connection, creating it if needed."""
+    global _conn
+    if _conn is None:
+        _conn = duckdb.connect()
+        _conn.execute("LOAD httpfs; LOAD spatial;")
+        _conn.execute("SET s3_region='us-west-2';")
+        _conn.execute("SET http_keep_alive=true;")
+    return _conn
 
 
 def _meters_to_deg(radius_m: float, lat: float) -> tuple[float, float]:
@@ -31,8 +37,8 @@ def _meters_to_deg(radius_m: float, lat: float) -> tuple[float, float]:
     return delta_lat, delta_lon
 
 
-def _row_to_dict(row: tuple) -> dict[str, Any]:
-    """Map a query result row (16 columns) to a building dict."""
+def _row_to_dict(row: tuple, dist_m: float | None = None) -> dict[str, Any]:
+    """Map a query result row to a building dict. dist_m is optional."""
     (
         building_id,
         geometry,
@@ -50,8 +56,9 @@ def _row_to_dict(row: tuple) -> dict[str, Any]:
         roof_shape,
         min_height,
         is_underground,
+        *rest
     ) = row
-    return {
+    d = {
         "id": building_id,
         "geometry_geojson": geometry,
         "height": height,
@@ -68,6 +75,11 @@ def _row_to_dict(row: tuple) -> dict[str, Any]:
         "roof_shape": roof_shape,
         "is_underground": is_underground,
     }
+    # Include dist_m if provided or present as the 17th column
+    effective_dist = dist_m if dist_m is not None else (rest[0] if rest else None)
+    if effective_dist is not None:
+        d["dist_m"] = effective_dist
+    return d
 
 
 # Standard 16-column select — no raw_geometry
@@ -102,40 +114,37 @@ def get_building(lat: float, lon: float, radius_m: int = 100) -> dict | None:
 
     Returns None if no building found within the radius.
     """
-    conn = _new_conn()
+    conn = _get_conn()
     delta_lat, delta_lon = _meters_to_deg(radius_m, lat)
 
-    try:
-        rows = conn.execute(
-            f"""
-            WITH candidates AS (
-                SELECT {_SELECT_COLS_WITH_RAW},
-                    ST_Distance(
-                        ST_Transform(geometry, 'EPSG:4326', 'EPSG:3857'),
-                        ST_Transform(ST_Point(?, ?), 'EPSG:4326', 'EPSG:3857')
-                    ) AS dist_m
-                FROM read_parquet('{OVERTURE_BUILDINGS}', hive_partitioning=1)
-                WHERE bbox.xmin >= ? AND bbox.xmax <= ?
-                AND bbox.ymin >= ? AND bbox.ymax <= ?
-            )
-            SELECT * EXCLUDE (dist_m, raw_geometry)
-            FROM candidates
-            WHERE dist_m <= ?
-            ORDER BY
-                CASE WHEN ST_Contains(raw_geometry, ST_Point(?, ?)) THEN 0 ELSE 1 END,
-                dist_m
-            LIMIT 1
-            """,
-            [
-                lon, lat,
-                lon - delta_lon, lon + delta_lon,
-                lat - delta_lat, lat + delta_lat,
-                float(radius_m),
-                lon, lat,
-            ],
-        ).fetchall()
-    finally:
-        conn.close()
+    rows = conn.execute(
+        f"""
+        WITH candidates AS (
+            SELECT {_SELECT_COLS_WITH_RAW},
+                ST_Distance(
+                    ST_Transform(geometry, 'EPSG:4326', 'EPSG:3857'),
+                    ST_Transform(ST_Point(?, ?), 'EPSG:4326', 'EPSG:3857')
+                ) AS dist_m
+            FROM read_parquet('{OVERTURE_BUILDINGS}', hive_partitioning=1)
+            WHERE bbox.xmin >= ? AND bbox.xmax <= ?
+            AND bbox.ymin >= ? AND bbox.ymax <= ?
+        )
+        SELECT * EXCLUDE (dist_m, raw_geometry)
+        FROM candidates
+        WHERE dist_m <= ?
+        ORDER BY
+            CASE WHEN ST_Contains(raw_geometry, ST_Point(?, ?)) THEN 0 ELSE 1 END,
+            dist_m
+        LIMIT 1
+        """,
+        [
+            lon, lat,
+            lon - delta_lon, lon + delta_lon,
+            lat - delta_lat, lat + delta_lat,
+            float(radius_m),
+            lon, lat,
+        ],
+    ).fetchall()
 
     if not rows:
         return None
@@ -153,38 +162,35 @@ def get_building_by_id(
     WARNING: Without lat/lon hints this scans the full global dataset and will
     be very slow. Provide lat_hint + lon_hint for a fast bounded search.
     """
-    conn = _new_conn()
-    try:
-        if lat_hint is not None and lon_hint is not None:
-            delta_lat, delta_lon = _meters_to_deg(radius_hint_m, lat_hint)
-            rows = conn.execute(
-                f"""
-                SELECT {_SELECT_COLS}
-                FROM read_parquet('{OVERTURE_BUILDINGS}', hive_partitioning=1)
-                WHERE id = ?
-                AND bbox.xmin >= ? AND bbox.xmax <= ?
-                AND bbox.ymin >= ? AND bbox.ymax <= ?
-                LIMIT 1
-                """,
-                [
-                    overture_id,
-                    lon_hint - delta_lon, lon_hint + delta_lon,
-                    lat_hint - delta_lat, lat_hint + delta_lat,
-                ],
-            ).fetchall()
-        else:
-            # Full scan — slow but correct
-            rows = conn.execute(
-                f"""
-                SELECT {_SELECT_COLS}
-                FROM read_parquet('{OVERTURE_BUILDINGS}', hive_partitioning=1)
-                WHERE id = ?
-                LIMIT 1
-                """,
-                [overture_id],
-            ).fetchall()
-    finally:
-        conn.close()
+    conn = _get_conn()
+    if lat_hint is not None and lon_hint is not None:
+        delta_lat, delta_lon = _meters_to_deg(radius_hint_m, lat_hint)
+        rows = conn.execute(
+            f"""
+            SELECT {_SELECT_COLS}
+            FROM read_parquet('{OVERTURE_BUILDINGS}', hive_partitioning=1)
+            WHERE id = ?
+            AND bbox.xmin >= ? AND bbox.xmax <= ?
+            AND bbox.ymin >= ? AND bbox.ymax <= ?
+            LIMIT 1
+            """,
+            [
+                overture_id,
+                lon_hint - delta_lon, lon_hint + delta_lon,
+                lat_hint - delta_lat, lat_hint + delta_lat,
+            ],
+        ).fetchall()
+    else:
+        # Full scan — slow but correct
+        rows = conn.execute(
+            f"""
+            SELECT {_SELECT_COLS}
+            FROM read_parquet('{OVERTURE_BUILDINGS}', hive_partitioning=1)
+            WHERE id = ?
+            LIMIT 1
+            """,
+            [overture_id],
+        ).fetchall()
 
     if not rows:
         return None
@@ -194,38 +200,38 @@ def get_building_by_id(
 def nearby_buildings(
     lat: float, lon: float, radius_m: int = 200, limit: int = 10
 ) -> list[dict]:
-    """Return buildings within radius_m metres of (lat, lon), nearest first."""
-    conn = _new_conn()
+    """Return buildings within radius_m metres of (lat, lon), nearest first.
+
+    dist_m is included in each result so callers can filter by proximity.
+    """
+    conn = _get_conn()
     delta_lat, delta_lon = _meters_to_deg(radius_m, lat)
 
-    try:
-        rows = conn.execute(
-            f"""
-            WITH candidates AS (
-                SELECT {_SELECT_COLS},
-                    ST_Distance(
-                        ST_Transform(geometry, 'EPSG:4326', 'EPSG:3857'),
-                        ST_Transform(ST_Point(?, ?), 'EPSG:4326', 'EPSG:3857')
-                    ) AS dist_m
-                FROM read_parquet('{OVERTURE_BUILDINGS}', hive_partitioning=1)
-                WHERE bbox.xmin >= ? AND bbox.xmax <= ?
-                AND bbox.ymin >= ? AND bbox.ymax <= ?
-            )
-            SELECT * EXCLUDE (dist_m)
-            FROM candidates
-            WHERE dist_m <= ?
-            ORDER BY dist_m
-            LIMIT ?
-            """,
-            [
-                lon, lat,
-                lon - delta_lon, lon + delta_lon,
-                lat - delta_lat, lat + delta_lat,
-                float(radius_m),
-                limit,
-            ],
-        ).fetchall()
-    finally:
-        conn.close()
+    rows = conn.execute(
+        f"""
+        WITH candidates AS (
+            SELECT {_SELECT_COLS},
+                ROUND(ST_Distance(
+                    ST_Transform(geometry, 'EPSG:4326', 'EPSG:3857'),
+                    ST_Transform(ST_Point(?, ?), 'EPSG:4326', 'EPSG:3857')
+                ), 1) AS dist_m
+            FROM read_parquet('{OVERTURE_BUILDINGS}', hive_partitioning=1)
+            WHERE bbox.xmin >= ? AND bbox.xmax <= ?
+            AND bbox.ymin >= ? AND bbox.ymax <= ?
+        )
+        SELECT *
+        FROM candidates
+        WHERE dist_m <= ?
+        ORDER BY dist_m
+        LIMIT ?
+        """,
+        [
+            lon, lat,
+            lon - delta_lon, lon + delta_lon,
+            lat - delta_lat, lat + delta_lat,
+            float(radius_m),
+            limit,
+        ],
+    ).fetchall()
 
     return [_row_to_dict(r) for r in rows]
