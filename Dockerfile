@@ -14,8 +14,8 @@ ENV PYTHONPATH=/app/src
 RUN python3 -c "import duckdb; c=duckdb.connect(); c.execute('INSTALL httpfs; INSTALL spatial;'); print('DuckDB extensions installed')"
 
 COPY src/ src/
-COPY start.sh .
+COPY run.py .
 
 EXPOSE 8000
 
-CMD ["sh", "start.sh"]
+CMD ["python3", "run.py"]
