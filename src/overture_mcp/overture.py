@@ -31,6 +31,14 @@ def _get_conn() -> duckdb.DuckDBPyConnection:
         _conn.execute("LOAD httpfs; LOAD spatial;")
         _conn.execute("SET s3_region='us-west-2';")
         _conn.execute("SET http_keep_alive=true;")
+        # Parallel S3 reads — default is 1; max out for parquet column fetches
+        _conn.execute("SET threads=8;")
+        _conn.execute("SET memory_limit='1.5GB';")
+        # Cache parquet row-group metadata so repeated bbox scans skip re-fetching
+        _conn.execute("SET enable_object_cache=true;")
+        _conn.execute("SET enable_http_metadata_cache=true;")
+        _conn.execute("SET http_retries=2;")
+        _conn.execute("SET http_timeout=20000;")
     return _conn
 
 

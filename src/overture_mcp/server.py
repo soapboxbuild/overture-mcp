@@ -7,7 +7,6 @@ Port: from PORT env var (default 8000).
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 import os
 from typing import Annotated
@@ -20,6 +19,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
+
+import asyncio
+import json
 
 from overture_mcp import nominatim, overture
 
@@ -162,6 +164,65 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
 
 # ---------------------------------------------------------------------------
+# Direct REST endpoints — bypass JSON-RPC for maximum throughput
+# Returns flat JSON arrays with no MCP protocol wrapping.
+# ---------------------------------------------------------------------------
+
+def _parse_float(request: Request, key: str) -> float | None:
+    v = request.query_params.get(key)
+    try:
+        return float(v) if v is not None else None
+    except ValueError:
+        return None
+
+def _parse_int(request: Request, key: str, default: int) -> int:
+    v = request.query_params.get(key)
+    try:
+        return int(v) if v is not None else default
+    except ValueError:
+        return default
+
+
+async def rest_buildings(request: Request) -> Response:
+    """GET /buildings?lat=&lon=&radius=&limit=
+    Returns a flat JSON array of building dicts, nearest-first.
+    Uses a single DuckDB scan — no MCP wrapper, no sequential fallback.
+    """
+    lat = _parse_float(request, "lat")
+    lon = _parse_float(request, "lon")
+    if lat is None or lon is None:
+        return JSONResponse({"error": "lat and lon required"}, status_code=400)
+
+    radius = _parse_int(request, "radius", 200)
+    limit = _parse_int(request, "limit", 50)
+
+    results = await asyncio.to_thread(overture.nearby_buildings, lat, lon, radius, limit)
+    return Response(
+        content=json.dumps(results),
+        media_type="application/json",
+    )
+
+
+async def rest_segments(request: Request) -> Response:
+    """GET /segments?lat=&lon=&radius=&limit=
+    Returns a flat JSON array of road segment dicts for block polygonization.
+    """
+    lat = _parse_float(request, "lat")
+    lon = _parse_float(request, "lon")
+    if lat is None or lon is None:
+        return JSONResponse({"error": "lat and lon required"}, status_code=400)
+
+    radius = _parse_int(request, "radius", 350)
+    limit = _parse_int(request, "limit", 300)
+
+    results = await asyncio.to_thread(overture.nearby_segments, lat, lon, radius, limit)
+    return Response(
+        content=json.dumps(results),
+        media_type="application/json",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Health endpoint
 # ---------------------------------------------------------------------------
 
@@ -187,6 +248,8 @@ app = Starlette(
     lifespan=lifespan,
     routes=[
         Route("/health", health),
+        Route("/buildings", rest_buildings),
+        Route("/segments", rest_segments),
         Mount("/", app=mcp_starlette),
     ],
     middleware=[
