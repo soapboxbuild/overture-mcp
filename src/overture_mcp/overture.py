@@ -13,6 +13,10 @@ OVERTURE_BUILDINGS = (
     f"s3://overturemaps-us-west-2/release/{OVERTURE_RELEASE}"
     "/theme=buildings/type=building/*"
 )
+OVERTURE_SEGMENTS = (
+    f"s3://overturemaps-us-west-2/release/{OVERTURE_RELEASE}"
+    "/theme=transportation/type=segment/*"
+)
 
 
 # Cached connection — avoids repeated extension loading + S3 metadata fetches per request
@@ -235,3 +239,51 @@ def nearby_buildings(
     ).fetchall()
 
     return [_row_to_dict(r) for r in rows]
+
+
+# Road classes that form meaningful block boundaries (exclude minor paths)
+_BLOCK_CLASSES = (
+    "motorway", "trunk", "primary", "secondary", "tertiary",
+    "residential", "living_street", "unclassified", "pedestrian",
+    "service",
+)
+_BLOCK_CLASS_LIST = ", ".join(f"'{c}'" for c in _BLOCK_CLASSES)
+
+
+def nearby_segments(
+    lat: float, lon: float, radius_m: int = 350, limit: int = 300
+) -> list[dict]:
+    """Return road segment LineStrings within radius_m metres of (lat, lon).
+
+    Returns GeoJSON LineString geometries for the road network.
+    Intended for client-side polygonization into city-block polygons.
+    Excludes footpaths, steps, cycle lanes, and rail to keep block topology clean.
+    """
+    conn = _get_conn()
+    delta_lat, delta_lon = _meters_to_deg(radius_m, lat)
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            id,
+            ST_AsGeoJSON(geometry) AS geometry_geojson,
+            class,
+            subtype
+        FROM read_parquet('{OVERTURE_SEGMENTS}', hive_partitioning=1)
+        WHERE bbox.xmin >= ? AND bbox.xmax <= ?
+          AND bbox.ymin >= ? AND bbox.ymax <= ?
+          AND subtype = 'road'
+          AND class IN ({_BLOCK_CLASS_LIST})
+        LIMIT ?
+        """,
+        [
+            lon - delta_lon, lon + delta_lon,
+            lat - delta_lat, lat + delta_lat,
+            limit,
+        ],
+    ).fetchall()
+
+    return [
+        {"id": row[0], "geometry_geojson": row[1], "class": row[2], "subtype": row[3]}
+        for row in rows
+    ]

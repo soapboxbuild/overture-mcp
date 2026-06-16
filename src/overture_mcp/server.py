@@ -107,6 +107,23 @@ async def nearby_buildings(
     return await asyncio.to_thread(overture.nearby_buildings, lat, lon, radius_m, limit)
 
 
+@mcp.tool()
+async def nearby_segments(
+    lat: Annotated[float, "Latitude (WGS84)"],
+    lon: Annotated[float, "Longitude (WGS84)"],
+    radius_m: Annotated[int, "Search radius in metres (default 350)"] = 350,
+    limit: Annotated[int, "Maximum number of segments to return (default 300)"] = 300,
+) -> list[dict]:
+    """Return road segment LineStrings within radius_m metres of a coordinate.
+
+    Returns GeoJSON LineString geometries for the surrounding road network.
+    Intended for client-side polygonization into city-block polygons.
+    Each result includes: id, geometry_geojson (LineString), class, subtype.
+    Footpaths, steps, cycleways, and rail are excluded.
+    """
+    return await asyncio.to_thread(overture.nearby_segments, lat, lon, radius_m, limit)
+
+
 # ---------------------------------------------------------------------------
 # Auth middleware
 # ---------------------------------------------------------------------------
