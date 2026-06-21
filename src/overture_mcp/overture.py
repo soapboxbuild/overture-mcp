@@ -278,15 +278,15 @@ def nearby_segments(
             class,
             subtype
         FROM read_parquet('{OVERTURE_SEGMENTS}', hive_partitioning=1)
-        WHERE bbox.xmin <= ? AND bbox.xmax >= ?
-          AND bbox.ymin <= ? AND bbox.ymax >= ?
+        WHERE bbox.xmin >= ? AND bbox.xmax <= ?
+          AND bbox.ymin >= ? AND bbox.ymax <= ?
           AND subtype = 'road'
           AND class IN ({_BLOCK_CLASS_LIST})
         LIMIT ?
         """,
         [
-            lon + delta_lon, lon - delta_lon,
-            lat + delta_lat, lat - delta_lat,
+            lon - delta_lon, lon + delta_lon,
+            lat - delta_lat, lat + delta_lat,
             limit,
         ],
     ).fetchall()
