@@ -238,6 +238,7 @@ def nearby_buildings(
         LIMIT ?
         """,
         [
+            lon, lat,
             lon + delta_lon, lon - delta_lon,
             lat + delta_lat, lat - delta_lat,
             float(radius_m),
