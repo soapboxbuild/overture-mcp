@@ -228,8 +228,8 @@ def nearby_buildings(
                     ST_Transform(ST_Point(?, ?), 'EPSG:4326', 'EPSG:3857')
                 ), 1) AS dist_m
             FROM read_parquet('{OVERTURE_BUILDINGS}', hive_partitioning=1)
-            WHERE bbox.xmin >= ? AND bbox.xmax <= ?
-            AND bbox.ymin >= ? AND bbox.ymax <= ?
+            WHERE bbox.xmin <= ? AND bbox.xmax >= ?
+            AND bbox.ymin <= ? AND bbox.ymax >= ?
         )
         SELECT *
         FROM candidates
@@ -238,9 +238,8 @@ def nearby_buildings(
         LIMIT ?
         """,
         [
-            lon, lat,
-            lon - delta_lon, lon + delta_lon,
-            lat - delta_lat, lat + delta_lat,
+            lon + delta_lon, lon - delta_lon,
+            lat + delta_lat, lat - delta_lat,
             float(radius_m),
             limit,
         ],
